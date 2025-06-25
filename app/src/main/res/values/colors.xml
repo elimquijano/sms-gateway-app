@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+
+    <!-- Colores personalizados para la App -->
+    <color name="button_start_green">#FF4CAF50</color>
+    <color name="button_stop_red">#FFF44336</color>
+
+    <color name="log_background">#ECECEC</color>
+    <color name="log_text">#FF000000</color> <!-- Texto negro para modo claro -->
+</resources>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- No es necesario redefinir black y white, pero sí nuestros colores personalizados -->
+
+    <!-- Colores personalizados para la App -->
+    <color name="button_start_green">#FF4CAF50</color>
+    <color name="button_stop_red">#FFF44336</color>
+
+    <color name="log_background">#1C1C1E</color> <!-- Fondo oscuro para logs -->
+    <color name="log_text">#FF00E676</color> <!-- Texto verde "hacker" para modo oscuro -->
+</resources>
