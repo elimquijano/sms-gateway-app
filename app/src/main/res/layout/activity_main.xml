@@ -23,6 +23,7 @@
             android:layout_height="wrap_content"
             android:inputType="textUri"
             android:maxLines="1" />
+
     </com.google.android.material.textfield.TextInputLayout>
 
     <Button
@@ -46,7 +47,6 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/btn_toggle_service" />
 
-    <!-- NUEVO: Botón para borrar logs -->
     <ImageButton
         android:id="@+id/btn_clear_logs"
         android:layout_width="wrap_content"

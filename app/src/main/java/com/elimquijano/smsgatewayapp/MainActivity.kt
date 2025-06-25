@@ -1,17 +1,20 @@
 package com.elimquijano.smsgatewayapp
 
 import android.Manifest
+import android.app.ActivityManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
+import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
-import android.view.View
+import android.view.View // <-- IMPORT QUE FALTABA
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -29,10 +32,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var appSettings: AppSettings
 
-    private val logReceiver = object : BroadcastReceiver() {
+    private val serviceStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            intent?.getStringExtra(SmsGatewayService.EXTRA_LOG_MESSAGE)?.let {
-                addLog(it)
+            when (intent?.action) {
+                SmsGatewayService.ACTION_LOG_UPDATE -> {
+                    intent.getStringExtra(SmsGatewayService.EXTRA_LOG_MESSAGE)?.let {
+                        addLog(it)
+                    }
+                }
+                SmsGatewayService.ACTION_SERVICE_STOPPED -> {
+                    setUIStateToStopped()
+                }
             }
         }
     }
@@ -56,26 +66,48 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             binding.etUrl.setText(appSettings.getServerUrl.first())
+            binding.tvLogs.text = appSettings.getLogs.first()
+            scrollToBottom()
         }
 
         binding.btnToggleService.setOnClickListener { toggleService() }
+        binding.btnClearLogs.setOnClickListener { clearLogs() }
+
+        val intentFilter = IntentFilter().apply {
+            addAction(SmsGatewayService.ACTION_LOG_UPDATE)
+            addAction(SmsGatewayService.ACTION_SERVICE_STOPPED)
+        }
+        LocalBroadcastManager.getInstance(this).registerReceiver(serviceStateReceiver, intentFilter)
     }
 
     override fun onResume() {
         super.onResume()
-        updateButtonState()
-        LocalBroadcastManager.getInstance(this).registerReceiver(
-            logReceiver, IntentFilter(SmsGatewayService.ACTION_LOG_BROADCAST)
-        )
+        if (isServiceRunning()) {
+            setUIStateToRunning()
+        } else {
+            setUIStateToStopped()
+        }
     }
 
-    override fun onPause() {
-        super.onPause()
-        LocalBroadcastManager.getInstance(this).unregisterReceiver(logReceiver)
+    override fun onDestroy() {
+        super.onDestroy()
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(serviceStateReceiver)
+    }
+
+    // ===================================================================
+    // ===== ESTA ES LA FUNCIÓN CORREGIDA ================================
+    // ===================================================================
+    @Suppress("DEPRECATION")
+    private fun isServiceRunning(): Boolean {
+        val manager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        // CORRECCIÓN: Arreglado el error de tipeo y el manejo de nulos.
+        return manager.getRunningServices(Integer.MAX_VALUE)
+            ?.any { it.service.className == SmsGatewayService::class.java.name }
+            ?: false
     }
 
     private fun toggleService() {
-        if (SmsGatewayService.isServiceRunning) {
+        if (isServiceRunning()) {
             stopGatewayService()
         } else {
             val url = binding.etUrl.text.toString().trim()
@@ -100,7 +132,6 @@ class MainActivity : AppCompatActivity() {
                 permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
-
         if (permissionsToRequest.isNotEmpty()) {
             permissionsLauncher.launch(permissionsToRequest.toTypedArray())
         } else {
@@ -123,16 +154,10 @@ class MainActivity : AppCompatActivity() {
             .setMessage("Para que el servicio funcione de forma continua, es crucial desactivar la optimización de batería para esta app.\n\nEn la siguiente pantalla, busca 'SmsGatewayApp' y selecciona 'No optimizar'.")
             .setPositiveButton("Ir a Configuración") { _, _ ->
                 try {
-                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
-                    intent.data = Uri.parse("package:$packageName")
+                    val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
                     startActivity(intent)
                 } catch (e: Exception) {
-                    try {
-                        val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                        startActivity(intent)
-                    } catch (e2: Exception) {
-                        Toast.makeText(this, "No se pudo abrir la configuración automáticamente. Por favor, ve a Configuración -> Batería y desactiva la optimización para esta app.", Toast.LENGTH_LONG).show()
-                    }
+                    Toast.makeText(this, "No se pudo abrir la configuración automáticamente. Por favor, hazlo manualmente.", Toast.LENGTH_LONG).show()
                 }
             }
             .setNegativeButton("Cancelar", null)
@@ -142,37 +167,54 @@ class MainActivity : AppCompatActivity() {
 
     private fun startGatewayService() {
         addLog("Iniciando servicio...")
+        setUIStateToRunning()
+
         val intent = Intent(this, SmsGatewayService::class.java).apply {
             putExtra("EXTRA_FULL_URL", binding.etUrl.text.toString().trim())
         }
         ContextCompat.startForegroundService(this, intent)
-        updateButtonState()
     }
 
     private fun stopGatewayService() {
         addLog("Deteniendo servicio...")
+        setUIStateToStopped()
+
         stopService(Intent(this, SmsGatewayService::class.java))
-        updateButtonState()
     }
 
-    private fun updateButtonState() {
-        if (SmsGatewayService.isServiceRunning) {
-            binding.btnToggleService.text = "Detener Servicio"
-            binding.btnToggleService.setBackgroundColor(ContextCompat.getColor(this, com.google.android.material.R.color.design_default_color_error))
-            binding.etUrl.isEnabled = false
-        } else {
-            binding.btnToggleService.text = "Iniciar Servicio"
-            binding.btnToggleService.setBackgroundColor(ContextCompat.getColor(this, com.google.android.material.R.color.design_default_color_primary))
-            binding.etUrl.isEnabled = true
-        }
+    private fun setUIStateToRunning() {
+        binding.btnToggleService.text = "Detener Servicio"
+        val redColor = ContextCompat.getColor(this, R.color.button_stop_red)
+        binding.btnToggleService.backgroundTintList = ColorStateList.valueOf(redColor)
+        binding.btnToggleService.setTextColor(Color.WHITE)
+        binding.etUrl.isEnabled = false
+    }
+
+    private fun setUIStateToStopped() {
+        binding.btnToggleService.text = "Iniciar Servicio"
+        val greenColor = ContextCompat.getColor(this, R.color.button_start_green)
+        binding.btnToggleService.backgroundTintList = ColorStateList.valueOf(greenColor)
+        binding.btnToggleService.setTextColor(Color.BLACK)
+        binding.etUrl.isEnabled = true
     }
 
     private fun addLog(message: String) {
-        val currentLogs = binding.tvLogs.text.toString()
-        val lines = currentLogs.lines()
-        val last100Lines = if (lines.size > 100) lines.takeLast(100).joinToString("\n") else currentLogs
+        lifecycleScope.launch {
+            appSettings.appendLog(message)
+            binding.tvLogs.text = appSettings.getLogs.first()
+            scrollToBottom()
+        }
+    }
 
-        binding.tvLogs.text = if (last100Lines.isEmpty()) message else "$last100Lines\n$message"
+    private fun clearLogs() {
+        lifecycleScope.launch {
+            appSettings.clearLogs()
+            binding.tvLogs.text = ""
+            Toast.makeText(this@MainActivity, "Logs borrados", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun scrollToBottom() {
         binding.scrollLogs.post { binding.scrollLogs.fullScroll(View.FOCUS_DOWN) }
     }
 }

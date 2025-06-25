@@ -29,18 +29,20 @@ class SmsGatewayService : Service() {
         const val TAG = "SmsGatewayService"
         const val NOTIFICATION_CHANNEL_ID = "SmsGatewayChannel"
         const val NOTIFICATION_ID = 1
-        var isServiceRunning = false
 
-        const val ACTION_LOG_BROADCAST = "com.elimquijano.smsgatewayapp.LOG_BROADCAST"
+        const val ACTION_LOG_UPDATE = "com.ejemplo.smsgatewayapp.LOG_UPDATE"
         const val EXTRA_LOG_MESSAGE = "extra_log_message"
+        const val ACTION_SERVICE_STARTED = "com.ejemplo.smsgatewayapp.SERVICE_STARTED"
+        const val ACTION_SERVICE_STOPPED = "com.ejemplo.smsgatewayapp.SERVICE_STOPPED"
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        isServiceRunning = true
+        LocalBroadcastManager.getInstance(this).sendBroadcast(Intent(ACTION_SERVICE_STARTED))
+
         val fullUrl = intent?.getStringExtra("EXTRA_FULL_URL")
 
         if (fullUrl.isNullOrBlank() || (!fullUrl.startsWith("ws://") && !fullUrl.startsWith("wss://"))) {
-            logMessage("Error: URL inválida proporcionada. Debe empezar con ws:// o wss://. Deteniendo servicio.")
+            logMessage("Error: URL inválida proporcionada. Deteniendo servicio.")
             stopSelf()
             return START_NOT_STICKY
         }
@@ -52,6 +54,15 @@ class SmsGatewayService : Service() {
         connect(fullUrl)
 
         return START_STICKY
+    }
+
+    override fun onDestroy() {
+        reconnectHandler.removeCallbacks(reconnectRunnable ?: return)
+        reconnectRunnable = null
+        webSocket?.close(1000, "Servicio detenido por el usuario.")
+        logMessage("Servicio detenido.")
+        LocalBroadcastManager.getInstance(this).sendBroadcast(Intent(ACTION_SERVICE_STOPPED))
+        super.onDestroy()
     }
 
     private fun connect(fullUrl: String) {
@@ -148,17 +159,8 @@ class SmsGatewayService : Service() {
         val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
         val log = "$timestamp - $message"
         Log.d(TAG, log)
-        val intent = Intent(ACTION_LOG_BROADCAST).putExtra(EXTRA_LOG_MESSAGE, log)
+        val intent = Intent(ACTION_LOG_UPDATE).putExtra(EXTRA_LOG_MESSAGE, log)
         LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
-    }
-
-    override fun onDestroy() {
-        isServiceRunning = false
-        reconnectHandler.removeCallbacks(reconnectRunnable ?: return)
-        reconnectRunnable = null
-        webSocket?.close(1000, "Servicio detenido por el usuario.")
-        logMessage("Servicio detenido.")
-        super.onDestroy()
     }
 
     private fun createNotification(contentText: String): Notification {
