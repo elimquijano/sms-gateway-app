@@ -30,15 +30,12 @@ class SmsGatewayService : Service() {
         const val NOTIFICATION_CHANNEL_ID = "SmsGatewayChannel"
         const val NOTIFICATION_ID = 1
 
-        const val ACTION_LOG_UPDATE = "com.ejemplo.smsgatewayapp.LOG_UPDATE"
+        const val ACTION_LOG_UPDATE = "com.elimquijano.smsgatewayapp.LOG_UPDATE"
         const val EXTRA_LOG_MESSAGE = "extra_log_message"
-        const val ACTION_SERVICE_STARTED = "com.ejemplo.smsgatewayapp.SERVICE_STARTED"
-        const val ACTION_SERVICE_STOPPED = "com.ejemplo.smsgatewayapp.SERVICE_STOPPED"
+        const val ACTION_SERVICE_STOPPED = "com.elimquijano.smsgatewayapp.SERVICE_STOPPED"
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        LocalBroadcastManager.getInstance(this).sendBroadcast(Intent(ACTION_SERVICE_STARTED))
-
         val fullUrl = intent?.getStringExtra("EXTRA_FULL_URL")
 
         if (fullUrl.isNullOrBlank() || (!fullUrl.startsWith("ws://") && !fullUrl.startsWith("wss://"))) {
@@ -132,11 +129,23 @@ class SmsGatewayService : Service() {
             val smsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 getSystemService(SmsManager::class.java)
             } else {
+                @Suppress("DEPRECATION")
                 SmsManager.getDefault()
             }
-            smsManager.sendTextMessage(task.numero, null, task.mensaje, null, null)
-            logMessage("ÉXITO: SMS para la tarea ${task.taskId} enviado.")
+
+            val parts = smsManager.divideMessage(task.mensaje)
+
+            if (parts.size > 1) {
+                logMessage("Mensaje largo detectado (${parts.size} partes). Enviando como multipart.")
+                smsManager.sendMultipartTextMessage(task.numero, null, parts, null, null)
+            } else {
+                logMessage("Mensaje corto detectado. Enviando como texto simple.")
+                smsManager.sendTextMessage(task.numero, null, task.mensaje, null, null)
+            }
+
+            logMessage("ÉXITO: Tarea de SMS ${task.taskId} enviada a la cola del sistema.")
             sendStatusUpdate(ClientStatusUpdate(status = "SENT", taskId = task.taskId))
+
         } catch (e: Exception) {
             logMessage("FALLO al enviar SMS para ${task.taskId}: ${e.message}")
             val failedUpdate = ClientStatusUpdate(
