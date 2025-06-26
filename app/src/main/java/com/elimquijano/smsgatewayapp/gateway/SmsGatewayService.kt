@@ -11,12 +11,19 @@ import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.elimquijano.smsgatewayapp.MainActivity
 import com.elimquijano.smsgatewayapp.R
 import com.google.gson.Gson
+import kotlinx.coroutines.*
 import okhttp3.*
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 class SmsGatewayService : Service() {
+
+    private val smsQueue = ConcurrentLinkedQueue<SmsTaskPayload>()
+    private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val isSenderLoopActive = AtomicBoolean(false)
 
     private lateinit var client: OkHttpClient
     private var webSocket: WebSocket? = null
@@ -46,6 +53,7 @@ class SmsGatewayService : Service() {
 
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, createNotification("Iniciando conexión..."))
+        startSenderLoop()
 
         client = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build()
         connect(fullUrl)
@@ -54,12 +62,72 @@ class SmsGatewayService : Service() {
     }
 
     override fun onDestroy() {
+        serviceScope.cancel()
         reconnectHandler.removeCallbacks(reconnectRunnable ?: return)
         reconnectRunnable = null
         webSocket?.close(1000, "Servicio detenido por el usuario.")
         logMessage("Servicio detenido.")
         LocalBroadcastManager.getInstance(this).sendBroadcast(Intent(ACTION_SERVICE_STOPPED))
         super.onDestroy()
+    }
+
+    private fun handleSmsTask(task: SmsTaskPayload) {
+        logMessage("Tarea ${task.taskId} recibida y añadida a la cola de envío (Total: ${smsQueue.size + 1}).")
+        smsQueue.offer(task)
+    }
+
+    private fun startSenderLoop() {
+        if (isSenderLoopActive.compareAndSet(false, true)) {
+            logMessage("Bucle de envío iniciado.")
+            serviceScope.launch {
+                while (isActive) {
+                    val taskToSend = smsQueue.poll()
+
+                    if (taskToSend != null) {
+                        logMessage("Procesando Tarea ${taskToSend.taskId} desde la cola...")
+                        try {
+                            val smsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                getSystemService(SmsManager::class.java)
+                            } else {
+                                @Suppress("DEPRECATION")
+                                SmsManager.getDefault()
+                            }
+
+                            val parts = smsManager.divideMessage(taskToSend.mensaje)
+
+                            if (parts.size > 1) {
+                                logMessage("Mensaje largo (${parts.size} partes). Enviando como multipart.")
+                                smsManager.sendMultipartTextMessage(taskToSend.numero, null, parts, null, null)
+                            } else {
+                                logMessage("Mensaje corto. Enviando como texto simple.")
+                                smsManager.sendTextMessage(taskToSend.numero, null, taskToSend.mensaje, null, null)
+                            }
+
+                            logMessage("ÉXITO: Tarea ${taskToSend.taskId} enviada a la cola del sistema.")
+                            sendStatusUpdate(ClientStatusUpdate(status = "SENT", taskId = taskToSend.taskId))
+
+                        } catch (e: Exception) {
+                            logMessage("FALLO al enviar SMS para ${taskToSend.taskId}: ${e.message}")
+                            val failedUpdate = ClientStatusUpdate(
+                                status = "FAILED",
+                                taskId = taskToSend.taskId,
+                                details = e.message ?: "Error desconocido en el dispositivo",
+                                failedTask = taskToSend
+                            )
+                            sendStatusUpdate(failedUpdate)
+                        }
+
+                        // ===================================================================
+                        // ===== PAUSA ÓPTIMA: 3 SEGUNDOS ====================================
+                        // ===================================================================
+                        delay(3000L)
+
+                    } else {
+                        delay(1000L)
+                    }
+                }
+            }
+        }
     }
 
     private fun connect(fullUrl: String) {
@@ -120,41 +188,6 @@ class SmsGatewayService : Service() {
             logMessage("Conexión cerrada. Se intentará reconectar.")
             updateNotification("Desconectado. Reconectando...")
             scheduleReconnect(ws.request().url.toString())
-        }
-    }
-
-    private fun handleSmsTask(task: SmsTaskPayload) {
-        logMessage("Procesando Tarea ${task.taskId} para ${task.numero}")
-        try {
-            val smsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                getSystemService(SmsManager::class.java)
-            } else {
-                @Suppress("DEPRECATION")
-                SmsManager.getDefault()
-            }
-
-            val parts = smsManager.divideMessage(task.mensaje)
-
-            if (parts.size > 1) {
-                logMessage("Mensaje largo detectado (${parts.size} partes). Enviando como multipart.")
-                smsManager.sendMultipartTextMessage(task.numero, null, parts, null, null)
-            } else {
-                logMessage("Mensaje corto detectado. Enviando como texto simple.")
-                smsManager.sendTextMessage(task.numero, null, task.mensaje, null, null)
-            }
-
-            logMessage("ÉXITO: Tarea de SMS ${task.taskId} enviada a la cola del sistema.")
-            sendStatusUpdate(ClientStatusUpdate(status = "SENT", taskId = task.taskId))
-
-        } catch (e: Exception) {
-            logMessage("FALLO al enviar SMS para ${task.taskId}: ${e.message}")
-            val failedUpdate = ClientStatusUpdate(
-                status = "FAILED",
-                taskId = task.taskId,
-                details = e.message ?: "Error desconocido en el dispositivo",
-                failedTask = task
-            )
-            sendStatusUpdate(failedUpdate)
         }
     }
 
