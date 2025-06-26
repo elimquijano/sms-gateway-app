@@ -1,4 +1,4 @@
-package com.elimquijano.smsgatewayapp.gateway
+package com.elimquijano.smsgatewayapp.gateway // He usado tu package name
 
 import android.app.*
 import android.content.Context
@@ -25,6 +25,9 @@ class SmsGatewayService : Service() {
     private var reconnectRunnable: Runnable? = null
     private var reconnectDelay = 5000L
 
+    // Bandera para gestionar el cierre controlado
+    private var isStopping = false
+
     companion object {
         const val TAG = "SmsGatewayService"
         const val NOTIFICATION_CHANNEL_ID = "SmsGatewayChannel"
@@ -33,13 +36,33 @@ class SmsGatewayService : Service() {
         const val ACTION_LOG_UPDATE = "com.elimquijano.smsgatewayapp.LOG_UPDATE"
         const val EXTRA_LOG_MESSAGE = "extra_log_message"
         const val ACTION_SERVICE_STOPPED = "com.elimquijano.smsgatewayapp.SERVICE_STOPPED"
+        const val ACTION_DISCONNECT_AND_STOP = "com.elimquijano.smsgatewayapp.DISCONNECT_AND_STOP"
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 1. Comprobar si la Activity nos ha ordenado detenernos
+        if (intent?.action == ACTION_DISCONNECT_AND_STOP) {
+            logMessage("Comando de detención recibido. Iniciando cierre limpio...")
+            isStopping = true
+            reconnectRunnable = null
+            reconnectHandler.removeCallbacksAndMessages(null)
+
+            // Si el socket está conectado, lo cerramos. El callback 'onClosed' se encargará de detener el servicio.
+            if (webSocket != null) {
+                webSocket?.close(1000, "Client requested disconnection")
+            } else {
+                // Si no había conexión, nos detenemos directamente.
+                stopSelf()
+            }
+            return START_NOT_STICKY
+        }
+
+        // 2. Si no, es una orden de inicio normal
+        isStopping = false
         val fullUrl = intent?.getStringExtra("EXTRA_FULL_URL")
 
         if (fullUrl.isNullOrBlank() || (!fullUrl.startsWith("ws://") && !fullUrl.startsWith("wss://"))) {
-            logMessage("Error: URL inválida proporcionada. Deteniendo servicio.")
+            logMessage("Error: URL inválida. Deteniendo servicio.")
             stopSelf()
             return START_NOT_STICKY
         }
@@ -54,15 +77,13 @@ class SmsGatewayService : Service() {
     }
 
     override fun onDestroy() {
-        reconnectHandler.removeCallbacks(reconnectRunnable ?: return)
-        reconnectRunnable = null
-        webSocket?.close(1000, "Servicio detenido por el usuario.")
-        logMessage("Servicio detenido.")
+        logMessage("Servicio destruido.")
         LocalBroadcastManager.getInstance(this).sendBroadcast(Intent(ACTION_SERVICE_STOPPED))
         super.onDestroy()
     }
 
     private fun connect(fullUrl: String) {
+        if (isStopping) return
         logMessage("Intentando conectar a $fullUrl")
         try {
             val request = Request.Builder().url(fullUrl).build()
@@ -74,7 +95,7 @@ class SmsGatewayService : Service() {
     }
 
     private fun scheduleReconnect(url: String) {
-        if (reconnectRunnable != null) return
+        if (isStopping || reconnectRunnable != null) return
         logMessage("Programando reconexión en ${reconnectDelay / 1000} segundos...")
         reconnectRunnable = Runnable {
             connect(url)
@@ -105,21 +126,29 @@ class SmsGatewayService : Service() {
             }
         }
 
-        override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
-            logMessage("Error de conexión: ${t.message}")
-            updateNotification("Error de conexión. Reconectando...")
-            scheduleReconnect(ws.request().url.toString())
-        }
-
         override fun onClosing(ws: WebSocket, code: Int, reason: String) {
             logMessage("Conexión cerrándose...")
-            ws.close(1000, null)
+        }
+
+        override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+            logMessage("Error de conexión: ${t.message}")
+            if (isStopping) {
+                stopSelf()
+            } else {
+                updateNotification("Error de conexión. Reconectando...")
+                scheduleReconnect(ws.request().url.toString())
+            }
         }
 
         override fun onClosed(ws: WebSocket, code: Int, reason: String) {
-            logMessage("Conexión cerrada. Se intentará reconectar.")
-            updateNotification("Desconectado. Reconectando...")
-            scheduleReconnect(ws.request().url.toString())
+            logMessage("Conexión cerrada.")
+            // Si el servicio se estaba apagando y se confirma el cierre, AHORA nos detenemos.
+            if (isStopping) {
+                stopSelf()
+            } else {
+                updateNotification("Desconectado. Reconectando...")
+                scheduleReconnect(ws.request().url.toString())
+            }
         }
     }
 
@@ -136,10 +165,8 @@ class SmsGatewayService : Service() {
             val parts = smsManager.divideMessage(task.mensaje)
 
             if (parts.size > 1) {
-                logMessage("Mensaje largo detectado (${parts.size} partes). Enviando como multipart.")
                 smsManager.sendMultipartTextMessage(task.numero, null, parts, null, null)
             } else {
-                logMessage("Mensaje corto detectado. Enviando como texto simple.")
                 smsManager.sendTextMessage(task.numero, null, task.mensaje, null, null)
             }
 

@@ -14,7 +14,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
-import android.view.View // <-- IMPORT QUE FALTABA
+import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -94,13 +94,9 @@ class MainActivity : AppCompatActivity() {
         LocalBroadcastManager.getInstance(this).unregisterReceiver(serviceStateReceiver)
     }
 
-    // ===================================================================
-    // ===== ESTA ES LA FUNCIÓN CORREGIDA ================================
-    // ===================================================================
     @Suppress("DEPRECATION")
     private fun isServiceRunning(): Boolean {
         val manager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        // CORRECCIÓN: Arreglado el error de tipeo y el manejo de nulos.
         return manager.getRunningServices(Integer.MAX_VALUE)
             ?.any { it.service.className == SmsGatewayService::class.java.name }
             ?: false
@@ -177,9 +173,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun stopGatewayService() {
         addLog("Deteniendo servicio...")
-        setUIStateToStopped()
+        val intent = Intent(this, SmsGatewayService::class.java).apply {
+            action = SmsGatewayService.ACTION_DISCONNECT_AND_STOP
+        }
+        startService(intent) // Usamos startService para enviar un comando al servicio ya en ejecución
 
-        stopService(Intent(this, SmsGatewayService::class.java))
+        // La UI se actualizará cuando reciba el broadcast ACTION_SERVICE_STOPPED
     }
 
     private fun setUIStateToRunning() {
@@ -199,11 +198,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun addLog(message: String) {
-        lifecycleScope.launch {
-            appSettings.appendLog(message)
-            binding.tvLogs.text = appSettings.getLogs.first()
-            scrollToBottom()
-        }
+        binding.tvLogs.append("\n$message")
+        scrollToBottom()
     }
 
     private fun clearLogs() {
