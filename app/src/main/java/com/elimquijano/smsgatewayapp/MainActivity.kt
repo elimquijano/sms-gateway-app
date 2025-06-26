@@ -9,12 +9,11 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.Color
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
-import android.view.View // <-- IMPORT QUE FALTABA
+import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -36,9 +35,7 @@ class MainActivity : AppCompatActivity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
                 SmsGatewayService.ACTION_LOG_UPDATE -> {
-                    intent.getStringExtra(SmsGatewayService.EXTRA_LOG_MESSAGE)?.let {
-                        addLog(it)
-                    }
+                    reloadLogsFromDataStore()
                 }
                 SmsGatewayService.ACTION_SERVICE_STOPPED -> {
                     setUIStateToStopped()
@@ -66,8 +63,7 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             binding.etUrl.setText(appSettings.getServerUrl.first())
-            binding.tvLogs.text = appSettings.getLogs.first()
-            scrollToBottom()
+            reloadLogsFromDataStore()
         }
 
         binding.btnToggleService.setOnClickListener { toggleService() }
@@ -87,6 +83,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             setUIStateToStopped()
         }
+        reloadLogsFromDataStore()
     }
 
     override fun onDestroy() {
@@ -94,13 +91,16 @@ class MainActivity : AppCompatActivity() {
         LocalBroadcastManager.getInstance(this).unregisterReceiver(serviceStateReceiver)
     }
 
-    // ===================================================================
-    // ===== ESTA ES LA FUNCIÓN CORREGIDA ================================
-    // ===================================================================
+    private fun reloadLogsFromDataStore() {
+        lifecycleScope.launch {
+            binding.tvLogs.text = appSettings.getLogs.first()
+            scrollToBottom()
+        }
+    }
+
     @Suppress("DEPRECATION")
     private fun isServiceRunning(): Boolean {
         val manager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        // CORRECCIÓN: Arreglado el error de tipeo y el manejo de nulos.
         return manager.getRunningServices(Integer.MAX_VALUE)
             ?.any { it.service.className == SmsGatewayService::class.java.name }
             ?: false
@@ -166,7 +166,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startGatewayService() {
-        addLog("Iniciando servicio...")
         setUIStateToRunning()
 
         val intent = Intent(this, SmsGatewayService::class.java).apply {
@@ -176,7 +175,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun stopGatewayService() {
-        addLog("Deteniendo servicio...")
         setUIStateToStopped()
 
         stopService(Intent(this, SmsGatewayService::class.java))
@@ -198,18 +196,10 @@ class MainActivity : AppCompatActivity() {
         binding.etUrl.isEnabled = true
     }
 
-    private fun addLog(message: String) {
-        lifecycleScope.launch {
-            appSettings.appendLog(message)
-            binding.tvLogs.text = appSettings.getLogs.first()
-            scrollToBottom()
-        }
-    }
-
     private fun clearLogs() {
         lifecycleScope.launch {
             appSettings.clearLogs()
-            binding.tvLogs.text = ""
+            reloadLogsFromDataStore()
             Toast.makeText(this@MainActivity, "Logs borrados", Toast.LENGTH_SHORT).show()
         }
     }
