@@ -8,7 +8,6 @@ import android.telephony.SmsManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
-import com.elimquijano.smsgatewayapp.AppSettings
 import com.elimquijano.smsgatewayapp.MainActivity
 import com.elimquijano.smsgatewayapp.R
 import com.google.gson.Gson
@@ -33,20 +32,14 @@ class SmsGatewayService : Service() {
     private var reconnectRunnable: Runnable? = null
     private var reconnectDelay = 5000L
 
-    private lateinit var appSettings: AppSettings
-
     companion object {
         const val TAG = "SmsGatewayService"
         const val NOTIFICATION_CHANNEL_ID = "SmsGatewayChannel"
         const val NOTIFICATION_ID = 1
 
         const val ACTION_LOG_UPDATE = "com.elimquijano.smsgatewayapp.LOG_UPDATE"
+        const val EXTRA_LOG_MESSAGE = "extra_log_message"
         const val ACTION_SERVICE_STOPPED = "com.elimquijano.smsgatewayapp.SERVICE_STOPPED"
-    }
-
-    override fun onCreate() {
-        super.onCreate()
-        appSettings = AppSettings(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -76,19 +69,6 @@ class SmsGatewayService : Service() {
         logMessage("Servicio detenido.")
         LocalBroadcastManager.getInstance(this).sendBroadcast(Intent(ACTION_SERVICE_STOPPED))
         super.onDestroy()
-    }
-
-    private fun logMessage(message: String) {
-        val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-        val log = "$timestamp - $message"
-        Log.d(TAG, log)
-
-        serviceScope.launch {
-            appSettings.appendLog(log)
-        }
-
-        val intent = Intent(ACTION_LOG_UPDATE)
-        LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
     }
 
     private fun handleSmsTask(task: SmsTaskPayload) {
@@ -137,6 +117,9 @@ class SmsGatewayService : Service() {
                             sendStatusUpdate(failedUpdate)
                         }
 
+                        // ===================================================================
+                        // ===== PAUSA ÓPTIMA: 3 SEGUNDOS ====================================
+                        // ===================================================================
                         delay(3000L)
 
                     } else {
@@ -212,6 +195,14 @@ class SmsGatewayService : Service() {
         val jsonUpdate = gson.toJson(update)
         logMessage("-> Enviando estado: $jsonUpdate")
         webSocket?.send(jsonUpdate)
+    }
+
+    private fun logMessage(message: String) {
+        val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        val log = "$timestamp - $message"
+        Log.d(TAG, log)
+        val intent = Intent(ACTION_LOG_UPDATE).putExtra(EXTRA_LOG_MESSAGE, log)
+        LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
     }
 
     private fun createNotification(contentText: String): Notification {
